@@ -31,8 +31,12 @@ class GraphStorage:
         """
         node_data example: {"label": "Person", "id": "123", "name": "Alice"}
         """
-        label = node_data.pop("label")
+        label = node_data.pop("label", "Node")   # default label if missing
         node_id = node_data.pop("id")
+
+        # Flatten nested "properties" dict into top-level props
+        props = node_data.pop("properties", {})
+        merged_props = {**node_data, **props}
 
         with self.driver.session() as session:
             session.run(
@@ -41,30 +45,40 @@ class GraphStorage:
                 SET n += $props
                 """,
                 id=node_id,
-                props=node_data
+                props=merged_props
             )
 
     def upsert_edge(self, edge_data: dict):
         """
-        edge_data example: {
-            "from": {"label": "Person", "id": "123"},
-            "to": {"label": "Company", "id": "456"},
-            "type": "OWNS"
+        edge_data example:
+        {
+            "id": "edge:teamA-owns-serviceX",
+            "type": "owns",
+            "source": "team:teamA",
+            "target": "service:serviceX"
         }
         """
-        from_label = edge_data["from"]["label"]
-        from_id = edge_data["from"]["id"]
-        to_label = edge_data["to"]["label"]
-        to_id = edge_data["to"]["id"]
+        source_id = edge_data["source"]
+        target_id = edge_data["target"]
         rel_type = edge_data["type"]
 
         with self.driver.session() as session:
             session.run(
-                f"""
-                MATCH (a:{from_label} {{id: $from_id}})
-                MATCH (b:{to_label} {{id: $to_id}})
-                MERGE (a)-[r:{rel_type}]->(b)
+                """
+                MATCH (a {id: $source_id})
+                MATCH (b {id: $target_id})
+                MERGE (a)-[r:REL {type: $rel_type}]->(b)
                 """,
-                from_id=from_id,
-                to_id=to_id
+                source_id=source_id,
+                target_id=target_id,
+                rel_type=rel_type
             )
+
+    def upsert_graph(self, nodes: list, edges: list):
+        """
+        Wrapper to insert/update a whole graph.
+        """
+        for node in nodes:
+            self.upsert_node(node)
+        for edge in edges:
+            self.upsert_edge(edge)

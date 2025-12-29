@@ -1,69 +1,37 @@
-import yaml
 import os
+from dotenv import load_dotenv
+import google.genai as genai
 
-class EKGConnector:
-    def __init__(self, data_dir="data"):
-        self.data_dir = data_dir
+load_dotenv()
 
-    def parse_docker_compose(self):
-        nodes = []
-        edges = []
-        path = os.path.join(self.data_dir, "docker-compose.yml")
-        
-        with open(path, 'r', encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-            services = data.get('services', {})
-            
-            for name, config in services.items():
-                node_id = f"service:{name}"
-                # Create Node
-                nodes.append({
-                    "id": node_id,
-                    "type": "service" if "build" in config else "infrastructure",
-                    "name": name,
-                    "properties": config.get('labels', {})
-                })
-                
-                # Infer Dependency Edges
-                for dep in config.get('depends_on', []):
-                    edges.append({
-                        "id": f"edge:{name}-depends_on-{dep}",
-                        "type": "depends_on",
-                        "source": node_id,
-                        "target": f"service:{dep}"
-                    })
-        return nodes, edges
+class EKGProcessor:
+    def __init__(self):
+        self.client = genai.Client(
+            api_key=os.getenv("GEMINI_API_KEY")
+        )
 
-    def parse_teams(self):
-        nodes = []
-        edges = []
-        path = os.path.join(self.data_dir, "teams.yaml")
-        
-        with open(path, 'r', encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-            for team in data.get('teams', []):
-                team_id = f"team:{team['name']}"
-                nodes.append({
-                    "id": team_id,
-                    "type": "team",
-                    "name": team['name'],
-                    "properties": {"lead": team['lead']}
-                })
-                # Create Ownership Edges
-                for service in team.get('owns', []):
-                    edges.append({
-                        "id": f"edge:{team['name']}-owns-{service}",
-                        "type": "owns",
-                        "source": team_id,
-                        "target": f"service:{service}"
-                    })
-        return nodes, edges
-if __name__ == "__main__":
-    connector = EKGConnector()
-    svc_nodes, svc_edges = connector.parse_docker_compose()
-    team_nodes, team_edges = connector.parse_teams()
+        # Use a model you VERIFIED exists
+        self.model_name = "models/gemini-pro-latest"
 
-    print("Services:", svc_nodes)
-    print("Edges:", svc_edges)
-    print("Teams:", team_nodes)
-    print("Ownership:", team_edges)
+    def generate_cypher(self, user_query: str) -> str:
+        system_context = """
+You are an expert Neo4j Database Engineer.
+The graph has nodes with types: service, team, infrastructure.
+Relationships are: depends_on, owns.
+
+Rules:
+1. Only return the Cypher query. No explanation.
+2. Use node properties like {name: 'order-service'}.
+3. If you cannot answer, return NOT_SUPPORTED.
+
+Example:
+MATCH (t:team)-[:owns]->(s:service {name:'payment-service'})
+RETURN t.name
+"""
+
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=f"{system_context}\n\nUser Question: {user_query}"
+        )
+
+        return response.text.strip()
